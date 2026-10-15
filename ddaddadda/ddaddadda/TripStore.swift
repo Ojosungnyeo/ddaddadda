@@ -56,6 +56,60 @@ final class TripStore {
         return result.sorted { $0.picks.count > $1.picks.count }
     }
 
+    func preferenceProfiles() -> [PreferenceProfile] {
+        members.map { member in
+            let picks = allPicks.filter { $0.ownerID == member.id }
+            let counts = Dictionary(grouping: picks, by: \.category).mapValues(\.count)
+            let ranked = counts.keys.sorted {
+                if counts[$0, default: 0] == counts[$1, default: 0] { return $0.title < $1.title }
+                return counts[$0, default: 0] > counts[$1, default: 0]
+            }
+            return PreferenceProfile(member: member, categories: ranked)
+        }
+    }
+
+    func groupingProposals() -> [GroupingProposal] {
+        clusters().map { cluster in
+            let activeMembers = cluster.members
+            let categoriesByMember = Dictionary(uniqueKeysWithValues: activeMembers.map { member in
+                (member.id, Set(cluster.picks.filter { $0.ownerID == member.id }.map(\.category)))
+            })
+            var unassigned = activeMembers
+            var groups: [ActivityGroup] = []
+            var groupIndex = 0
+
+            while let seed = unassigned.first {
+                unassigned.removeFirst()
+                var grouped = [seed]
+                let seedCategories = categoriesByMember[seed.id, default: []]
+                let companions = unassigned.filter { member in
+                    !seedCategories.intersection(categoriesByMember[member.id, default: []]).isEmpty
+                }
+                grouped.append(contentsOf: companions)
+                unassigned.removeAll { candidate in companions.contains(where: { $0.id == candidate.id }) }
+                let memberIDs = Set(grouped.map(\.id))
+                let picks = cluster.picks.filter { memberIDs.contains($0.ownerID) }
+                let tastes = Array(Set(picks.map(\.category))).map(\.title).sorted().joined(separator: ", ")
+                groups.append(ActivityGroup(
+                    members: grouped,
+                    picks: picks,
+                    label: "그룹 \(String(UnicodeScalar(65 + groupIndex)!))",
+                    reason: grouped.count > 1 ? "\(tastes) 취향이 겹쳐 함께 즐기기 좋아요." : "\(tastes) 취향을 충분히 즐기도록 별도 그룹으로 제안해요."
+                ))
+                groupIndex += 1
+            }
+
+            let activeIDs = Set(activeMembers.map(\.id))
+            for member in members where !activeIDs.contains(member.id) {
+                groups.append(ActivityGroup(
+                    members: [member], picks: [], label: "자유 선택",
+                    reason: "이 지역에 저장한 장소가 없어요. 근처 자유시간을 갖거나 다른 그룹에 합류할지 본인에게 확인해야 해요."
+                ))
+            }
+            return GroupingProposal(cluster: cluster, groups: groups)
+        }
+    }
+
     private func publish() { sharing.send(.init(member: me, picks: myPicks)) }
     private func receive(_ state: SharedTripState) { guard state.member.id != me.id else { return }; remoteStates[state.member.id] = state }
     private static func center(of picks: [PlacePick]) -> CLLocationCoordinate2D {

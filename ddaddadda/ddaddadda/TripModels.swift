@@ -30,6 +30,17 @@ enum PlaceCategory: String, Codable, CaseIterable {
         }
     }
 
+    var title: String {
+        switch self {
+        case .food: "맛집"
+        case .cafe: "카페·베이커리"
+        case .culture: "전시·문화"
+        case .nature: "바다·자연"
+        case .shopping: "쇼핑·서점"
+        case .other: "새로운 장소"
+        }
+    }
+
     static func infer(from item: MKMapItem) -> PlaceCategory {
         let text = [item.name, item.pointOfInterestCategory?.rawValue].compactMap { $0 }.joined(separator: " ").lowercased()
         if text.contains("restaurant") || text.contains("food") || text.contains("횟집") || text.contains("식당") { return .food }
@@ -67,4 +78,39 @@ struct PlaceCluster: Identifiable {
         var seen = Set<UUID>()
         return picks.compactMap { seen.insert($0.owner.id).inserted ? $0.owner : nil }
     }
+}
+
+struct PreferenceProfile: Identifiable {
+    let member: TripMember
+    let categories: [PlaceCategory]
+    var id: UUID { member.id }
+    var summary: String { categories.isEmpty ? "취향 파악 중" : categories.prefix(3).map(\.title).joined(separator: ", ") }
+}
+
+struct ActivityGroup: Identifiable {
+    let id = UUID()
+    let members: [TripMember]
+    let picks: [PlacePick]
+    let label: String
+    let reason: String
+    var memberNames: String { members.map(\.name).joined(separator: " + ") }
+    var title: String { picks.isEmpty ? "자유시간 또는 합류" : picks.map(\.name).joined(separator: " · ") }
+    var categorySummary: String {
+        Array(Set(picks.map(\.category))).map(\.title).sorted().joined(separator: ", ")
+    }
+}
+
+struct GroupingProposal: Identifiable {
+    let id = UUID()
+    let cluster: PlaceCluster
+    let groups: [ActivityGroup]
+    var isSplit: Bool { groups.filter { !$0.picks.isEmpty }.count > 1 }
+}
+
+struct ScheduledGroupBlock: Identifiable {
+    let id = UUID()
+    let proposalID: UUID
+    let group: ActivityGroup
+    var day: Int
+    var slot: Int
 }
