@@ -11,6 +11,7 @@ struct TimetableView: View {
         proposals.flatMap { proposal in proposal.groups.map { BlockCandidate(proposal: proposal, group: $0) } }
     }
     private var scheduledToday: [ScheduledGroupBlock] { scheduled.filter { $0.day == selectedDay }.sorted { $0.slot < $1.slot } }
+    private var occupiedSlots: [Int] { Array(Set(scheduledToday.map(\.slot))).sorted() }
 
     var body: some View {
         ScrollView {
@@ -100,17 +101,34 @@ struct TimetableView: View {
                     Text("위 블록을 눌러 날짜와 시간을 골라주세요.").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity).padding(.vertical, 42)
             } else {
-                ForEach(scheduledToday) { block in
+                ForEach(occupiedSlots, id: \.self) { slot in
                     HStack(alignment: .top, spacing: 12) {
                         VStack(spacing: 0) {
-                            Circle().fill(color(for: block.group)).frame(width: 13, height: 13)
-                            Rectangle().fill(Color.secondary.opacity(0.22)).frame(width: 2, height: 104)
+                            Circle().fill(slotColor(slot)).frame(width: 13, height: 13)
+                            Rectangle().fill(Color.secondary.opacity(0.22)).frame(width: 2, height: 118)
                         }.padding(.top, 18)
-                        scheduleCard(block)
+                        slotRow(slot)
                     }
                 }
             }
         }.cardStyle()
+    }
+
+    @ViewBuilder
+    private func slotRow(_ slot: Int) -> some View {
+        let blocks = blocks(in: slot)
+        if blocks.count <= 2 {
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(blocks) { block in scheduleCard(block) }
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(blocks) { block in scheduleCard(block).frame(width: 165) }
+                }
+            }
+        }
     }
 
     private func scheduleCard(_ block: ScheduledGroupBlock) -> some View {
@@ -120,11 +138,11 @@ struct TimetableView: View {
                 Spacer()
                 Button { scheduled.removeAll { $0.id == block.id } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
             }
-            Text(block.group.memberNames).font(.headline)
+            Text(block.group.memberNames).font(.subheadline.bold()).lineLimit(1)
             Text(block.group.title).font(.subheadline).lineLimit(2)
-            if !block.group.categorySummary.isEmpty { Text(block.group.categorySummary).font(.caption).foregroundStyle(color(for: block.group)) }
+            if !block.group.categorySummary.isEmpty { Text(block.group.categorySummary).font(.caption2).foregroundStyle(color(for: block.group)).lineLimit(1) }
         }
-        .padding(14).frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+        .padding(12).frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
         .background(color(for: block.group).opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(color(for: block.group).opacity(0.25)))
     }
@@ -132,6 +150,8 @@ struct TimetableView: View {
     private var availableCandidates: [BlockCandidate] {
         let used = Set(scheduled.map(\.group.id)); return candidates.filter { !used.contains($0.group.id) }
     }
+    private func blocks(in slot: Int) -> [ScheduledGroupBlock] { scheduledToday.filter { $0.slot == slot } }
+    private func slotColor(_ slot: Int) -> Color { blocks(in: slot).first.map { color(for: $0.group) } ?? TripTheme.indigo }
     private func color(for group: ActivityGroup) -> Color { group.members.first?.color ?? TripTheme.indigo }
 }
 
