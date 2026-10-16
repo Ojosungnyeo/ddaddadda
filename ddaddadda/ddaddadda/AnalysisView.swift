@@ -4,50 +4,118 @@ import MapKit
 struct AnalysisView: View {
     @Bindable var store: TripStore
     @Environment(\.dismiss) private var dismiss
-
-    private var proposals: [GroupingProposal] { store.groupingProposals() }
+    @State private var travelMode: TravelMode = .transit
+    @State private var maxTravelMinutes = 30
+    @State private var proposals: [GroupingProposal] = []
+    @State private var hasGrouped = false
+    @State private var isGrouping = false
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    intro
-                    preferenceSection
-                    if store.members.count == 1 { waitingCard }
-                    ForEach(Array(proposals.enumerated()), id: \.element.id) { index, proposal in
-                        proposalCard(proposal, number: index + 1)
-                    }
-                    alternatives
-                    limits
-                    NavigationLink {
-                        TimetableView(proposals: proposals)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("2박 3일 그룹 일정 확인").font(.headline)
-                                Text("제안된 그룹 블록을 시간표에 넣어보세요").font(.caption).opacity(0.8)
-                            }
-                            Spacer(); Image(systemName: "arrow.right")
-                        }
-                        .padding(18).foregroundStyle(.white)
-                        .background(TripTheme.indigo, in: RoundedRectangle(cornerRadius: 20))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(proposals.isEmpty)
-                }.padding(18)
+            Group {
+                if hasGrouped { resultContent } else { setupContent }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("취향 기반 그룹 제안")
+            .navigationTitle(hasGrouped ? "취향 기반 그룹 제안" : "지역 기준 설정")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("닫기") { dismiss() } } }
         }
     }
 
+    private var setupContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("어느 범위를\n같은 지역으로 볼까요?").font(.largeTitle.bold())
+                    Text("직선거리가 아니라 실제 이동수단의 예상 이동시간으로 장소를 먼저 묶어요. 그 다음 같은 지역 안에서 취향으로 그룹을 나눠요.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("이동수단", systemImage: "arrow.triangle.swap").font(.headline)
+                    Picker("이동수단", selection: $travelMode) {
+                        ForEach(TravelMode.allCases) { mode in Label(mode.title, systemImage: mode.symbol).tag(mode) }
+                    }.pickerStyle(.segmented)
+                }.cardStyle()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("같은 지역으로 볼 이동시간", systemImage: "clock.fill").font(.headline)
+                    HStack(spacing: 9) {
+                        ForEach([15, 30, 45, 60], id: \.self) { minutes in
+                            Button { maxTravelMinutes = minutes } label: {
+                                Text("\(minutes)분").font(.subheadline.bold())
+                                    .foregroundStyle(maxTravelMinutes == minutes ? .white : .primary)
+                                    .frame(maxWidth: .infinity).frame(height: 44)
+                                    .background(maxTravelMinutes == minutes ? TripTheme.indigo : Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                    Text("\(travelMode.title)로 \(maxTravelMinutes)분 안에 이동할 수 있는 장소를 같은 지역으로 묶습니다.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.cardStyle()
+
+                Button { runGrouping() } label: {
+                    HStack {
+                        if isGrouping { ProgressView().tint(.white) }
+                        Text(isGrouping ? "MapKit 이동시간 계산 중…" : "이 기준으로 그룹핑하기")
+                        Spacer(); if !isGrouping { Image(systemName: "arrow.right") }
+                    }
+                    .font(.headline).foregroundStyle(.white).padding(.horizontal, 18).frame(height: 58)
+                    .background(TripTheme.indigo, in: RoundedRectangle(cornerRadius: 18))
+                }.buttonStyle(.plain).disabled(isGrouping || store.allPicks.isEmpty)
+
+                Label("대중교통 경로는 MapKit에서 제공하지 않는 지역이 있을 수 있어요. 경로를 확인할 수 없으면 두 장소를 별도 지역으로 유지해요.", systemImage: "info.circle")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }.padding(18)
+        }
+    }
+
+    private var resultContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                criteriaBar
+                intro
+                preferenceSection
+                if store.members.count == 1 { waitingCard }
+                ForEach(Array(proposals.enumerated()), id: \.element.id) { index, proposal in proposalCard(proposal, number: index + 1) }
+                alternatives
+                limits
+                NavigationLink { TimetableView(proposals: proposals) } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("2박 3일 그룹 일정 확인").font(.headline)
+                            Text("제안된 그룹 블록을 시간표에 넣어보세요").font(.caption).opacity(0.8)
+                        }
+                        Spacer(); Image(systemName: "arrow.right")
+                    }.padding(18).foregroundStyle(.white).background(TripTheme.indigo, in: RoundedRectangle(cornerRadius: 20))
+                }.buttonStyle(.plain).disabled(proposals.isEmpty)
+            }.padding(18)
+        }
+    }
+
+    private var criteriaBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: travelMode.symbol).foregroundStyle(TripTheme.indigo)
+            Text("\(travelMode.title) · \(maxTravelMinutes)분 이내").font(.subheadline.bold())
+            Spacer()
+            Button("기준 바꾸기") { hasGrouped = false; proposals = [] }.font(.caption.bold())
+        }.padding(14).background(TripTheme.indigo.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func runGrouping() {
+        isGrouping = true
+        Task {
+            proposals = await store.groupingProposals(mode: travelMode, maxTravelMinutes: maxTravelMinutes)
+            isGrouping = false
+            hasGrouped = true
+        }
+    }
+
     private var intro: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("거리보다 취향을 먼저 봤어요", systemImage: "heart.text.square.fill")
+            Label("지역은 시간으로, 그룹은 취향으로", systemImage: "heart.text.square.fill")
                 .font(.title2.bold()).foregroundStyle(TripTheme.indigo)
-            Text("먼저 가까운 장소를 지역으로 묶고, 그 안에서 맛집·카페·문화·자연 취향이 겹치는 사람들을 함께 묶었어요. 같은 지역이어도 원하는 경험이 다르면 잠시 나누어요.")
+            Text("\(travelMode.title)로 \(maxTravelMinutes)분 안에 이동할 수 있는 장소를 지역으로 묶고, 그 안에서 맛집·카페·문화·자연 취향이 겹치는 사람들을 함께 묶었어요.")
                 .font(.subheadline).foregroundStyle(.secondary)
             HStack(spacing: 0) {
                 metric("\(store.members.count)", "명")
