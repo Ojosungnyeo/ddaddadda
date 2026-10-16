@@ -8,6 +8,20 @@ enum TripTheme {
     static let amber = Color(red: 0.96, green: 0.60, blue: 0.12)
 }
 
+enum TravelMode: String, CaseIterable, Identifiable {
+    case automobile, transit, walking
+    var id: Self { self }
+    var title: String {
+        switch self { case .automobile: "자동차"; case .transit: "대중교통"; case .walking: "도보" }
+    }
+    var symbol: String {
+        switch self { case .automobile: "car.fill"; case .transit: "bus.fill"; case .walking: "figure.walk" }
+    }
+    var transportType: MKDirectionsTransportType {
+        switch self { case .automobile: .automobile; case .transit: .transit; case .walking: .walking }
+    }
+}
+
 struct TripMember: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String

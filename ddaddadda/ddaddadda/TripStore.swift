@@ -8,6 +8,7 @@ final class TripStore {
     private(set) var myPicks: [PlacePick] = []
     private(set) var remoteStates: [UUID: SharedTripState] = [:]
     let sharing: NearbyTripSession
+    @ObservationIgnored private var travelTimeCache: [RouteKey: TimeInterval] = [:]
 
     init() {
         let storedID = UserDefaults.standard.string(forKey: "memberID").flatMap(UUID.init) ?? UUID()
@@ -56,6 +57,34 @@ final class TripStore {
         return result.sorted { $0.picks.count > $1.picks.count }
     }
 
+    func clusters(mode: TravelMode, maxTravelMinutes: Int) async -> [PlaceCluster] {
+        var remaining = allPicks
+        var result: [PlaceCluster] = []
+        var index = 1
+        let limit = TimeInterval(maxTravelMinutes * 60)
+
+        while let seed = remaining.first {
+            var group = [seed]
+            remaining.removeFirst()
+            var changed = true
+            while changed {
+                changed = false
+                for candidate in remaining {
+                    guard let nearest = group.min(by: { straightDistance($0, candidate) < straightDistance($1, candidate) }) else { continue }
+                    if let travelTime = await expectedTravelTime(from: nearest, to: candidate, mode: mode), travelTime <= limit {
+                        group.append(candidate)
+                        remaining.removeAll { $0.id == candidate.id }
+                        changed = true
+                        break
+                    }
+                }
+            }
+            result.append(.init(name: Self.regionName(for: group, index: index), picks: group, center: Self.center(of: group)))
+            index += 1
+        }
+        return result.sorted { $0.picks.count > $1.picks.count }
+    }
+
     func preferenceProfiles() -> [PreferenceProfile] {
         members.map { member in
             let picks = allPicks.filter { $0.ownerID == member.id }
@@ -69,7 +98,15 @@ final class TripStore {
     }
 
     func groupingProposals() -> [GroupingProposal] {
-        clusters().map { cluster in
+        proposals(for: clusters())
+    }
+
+    func groupingProposals(mode: TravelMode, maxTravelMinutes: Int) async -> [GroupingProposal] {
+        proposals(for: await clusters(mode: mode, maxTravelMinutes: maxTravelMinutes))
+    }
+
+    private func proposals(for clusters: [PlaceCluster]) -> [GroupingProposal] {
+        clusters.map { cluster in
             let activeMembers = cluster.members
             let categoriesByMember = Dictionary(uniqueKeysWithValues: activeMembers.map { member in
                 (member.id, Set(cluster.picks.filter { $0.ownerID == member.id }.map(\.category)))
@@ -110,6 +147,30 @@ final class TripStore {
         }
     }
 
+    private func expectedTravelTime(from start: PlacePick, to end: PlacePick, mode: TravelMode) async -> TimeInterval? {
+        let key = RouteKey(start: start.id, end: end.id, mode: mode)
+        if let cached = travelTimeCache[key] { return cached }
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: start.coordinate))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: end.coordinate))
+        request.transportType = mode.transportType
+        request.requestsAlternateRoutes = false
+        do {
+            let response = try await MKDirections(request: request).calculate()
+            guard let seconds = response.routes.first?.expectedTravelTime else { return nil }
+            travelTimeCache[key] = seconds
+            travelTimeCache[RouteKey(start: end.id, end: start.id, mode: mode)] = seconds
+            return seconds
+        } catch {
+            return nil
+        }
+    }
+
+    private func straightDistance(_ first: PlacePick, _ second: PlacePick) -> CLLocationDistance {
+        CLLocation(latitude: first.latitude, longitude: first.longitude)
+            .distance(from: CLLocation(latitude: second.latitude, longitude: second.longitude))
+    }
+
     private func publish() { sharing.send(.init(member: me, picks: myPicks)) }
     private func receive(_ state: SharedTripState) { guard state.member.id != me.id else { return }; remoteStates[state.member.id] = state }
     private static func center(of picks: [PlacePick]) -> CLLocationCoordinate2D {
@@ -120,4 +181,10 @@ final class TripStore {
         if let common = Dictionary(grouping: words, by: { $0 }).max(by: { $0.value.count < $1.value.count }), common.value.count > 1 { return "\(common.key)권" }
         return "지역 \(index)"
     }
+}
+
+private struct RouteKey: Hashable {
+    let start: UUID
+    let end: UUID
+    let mode: TravelMode
 }
